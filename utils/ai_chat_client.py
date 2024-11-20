@@ -17,6 +17,17 @@ def _get_client(model: str, is_async: bool = False) -> OpenAI | AsyncOpenAI:
     """Return appropriate OpenAI client based on model and type."""
     client_class = AsyncOpenAI if is_async else OpenAI
     
+    # 处理 OpenRouter 模型 (包含 '/' 的模型名称)
+    if '/' in model:
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        base_url = os.environ.get("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
+        if not api_key:
+            raise ValueError(
+                "Missing required environment variable: OPENROUTER_API_KEY"
+            )
+        return client_class(api_key=api_key, base_url=base_url)
+    
+    # 处理 Deepseek 模型
     if model == 'deepseek-chat':
         api_key = os.environ.get("DEEPSEEK_API_KEY")
         base_url = os.environ.get("DEEPSEEK_API_BASE")
@@ -27,6 +38,7 @@ def _get_client(model: str, is_async: bool = False) -> OpenAI | AsyncOpenAI:
             )
         return client_class(api_key=api_key, base_url=base_url)
     
+    # 处理默认 OpenAI 模型
     api_key = os.environ.get("OPENAI_API_KEY")
     base_url = os.environ.get("OPENAI_API_BASE")
     if not api_key:

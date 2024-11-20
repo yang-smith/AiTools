@@ -22,7 +22,10 @@ class Worker:
             model=model,
             system_prompt=system_prompt
         )
-
+    
+    def handle_tool_call(self, tool_call: str):
+        pass
+    
     def run(self, task_info: str):
         self.memory.add_message("user", task_info)
         messages = self.memory.get_context()
