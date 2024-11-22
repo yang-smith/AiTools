@@ -2,37 +2,11 @@ from utils.ai_chat_client import ai_chat
 from memory_manager import ConversationManager
 from datetime import datetime
 import re
-
-class Worker:
-    
-    def __init__(self, 
-                 description: str = "a worker that can do tasks",
-                 system_prompt: str = "You are a worker that can do tasks",
-                 model: str = "gpt-4-mini",
-                 max_tokens: int = 2000,
-                 tools: list = [],
-                 ):
-        self.description = description
-        self.system_prompt = system_prompt
-        self.model = model
-        self.max_tokens = max_tokens
-        self.tools = tools
-        
-        self.memory = ConversationManager(
-            max_tokens=max_tokens,
-            model=model,
-            system_prompt=system_prompt
-        )
-    
-    def handle_tool_call(self, tool_call: str):
-        pass
-    
-    def run(self, task_info: str):
-        self.memory.add_message("user", task_info)
-        messages = self.memory.get_context()
-        result = ai_chat(message=messages, model=self.model)
-        self.memory.add_message("assistant", result)
-        return result
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
+from tqdm import tqdm
+import prompt_record2doc
+import os 
 
 def split_chat_records(chat_text, max_messages=500, min_messages=300, time_gap_minutes=100):
     """
@@ -158,85 +132,80 @@ def split_tasks(task_text: str) -> list[str]:
     
     return parsed_tasks
 
+def gen_structure(user_input, chat_records):
+    structure_file = 'output/document_structure.txt'
+    
+    # 如果结构文件已存在，直接读取内容
+    if os.path.exists(structure_file):
+        with open(structure_file, 'r', encoding='utf-8') as f:
+            return f.read()
+    
+    # 如果文件不存在，生成新的结构
+    combined_input = prompt_record2doc.PROMPT_GEN_DOC_STRUCTURE.format(user_input=user_input, chat_records=chat_records)
+
+    result = ai_chat(message=combined_input, model="anthropic/claude-3.5-sonnet:beta")
+    # result = ai_chat(message=combined_input, model="openai/gpt-4o-2024-11-20")
+    print(result)
+    
+    # 确保输出目录存在并保存结果
+    os.makedirs('output', exist_ok=True)
+    with open(structure_file, 'w', encoding='utf-8') as f:
+        f.write(result)
+        f.write('\n')
+    return result
+
+def process_single_task(task_num, task, chat_records, output_path='output'):
+    # 确保输出目录存在
+    os.makedirs(output_path, exist_ok=True)
+    
+    prompt_gen_doc_content = prompt_record2doc.PROMPT_GEN_DOC_CONTENT.format(task_instruction=task, chat_records=chat_records)
+    # 获取并保存 gpt-4o-mini 的结果
+    gpt4_result = ai_chat(message=prompt_gen_doc_content, model="openai/gpt-4o-mini-2024-07-18")
+    with open(f'{output_path}/result_task_{task_num}.md', 'a', encoding='utf-8') as f:
+        f.write(gpt4_result)
+        f.write('<page_end> \n')
+    
+    return task_num, gpt4_result
 
 def main():    
-    import prompt_record2doc
 
     # with open('ToAnotherCountry.txt', 'r', encoding='utf-8') as file:
-    with open('ToAnotherCountry.txt', 'r', encoding='utf-8') as file:
+    with open('DNyucun.txt', 'r', encoding='utf-8') as file:
         chat_text = file.read()
-    segments = split_chat_records(chat_text)
+    segments = split_chat_records(chat_text, max_messages=1000, min_messages=800, time_gap_minutes=100)
     
     # 打印总段数
     print(f"聊天记录被分割成 {len(segments)} 个部分\n")
     
     chat_records = segments[0]
-    user_input = "将聊天记录转为一份常见问答文档"
-    combined_input = prompt_record2doc.PROMPT_GEN_DOC_STRUCTURE.format(user_input=user_input, chat_records=chat_records)
 
-    result = ai_chat(message=combined_input, model="anthropic/claude-3.5-sonnet:beta")
-    print(result)
-
-    # task_instruction = prompt_record2doc.PROMPT_GEN_TASK_INSTRUCTION.format(doc_structure=result)
-
-    # result = ai_chat(message=task_instruction, model="anthropic/claude-3.5-sonnet:beta")
+    # user_input = "将聊天记录转为一份常见问答文档"
+    user_input = "将聊天记录转为一份社区生活指南"
+    result = gen_structure(user_input, chat_records)
 
     tasks = split_tasks(result)
-    for task in tasks:
-        print("\n-----\n")
-        print(task)
-        
-        prompt_gen_doc_content = prompt_record2doc.PROMPT_GEN_DOC_CONTENT.format(task_instruction=task, chat_records=chat_records)
-        # 获取并保存 gpt-4o-mini 的结果
-        gpt4_result = ai_chat(message=prompt_gen_doc_content, model="openai/gpt-4o-mini-2024-07-18")
-        with open('result_gpt4o.md', 'a', encoding='utf-8') as f:
-            f.write(gpt4_result)
-    return 
-
-    # 将结果转为文档
-    prompt_gen_doc_content = prompt_record2doc.PROMPT_GEN_DOC_CONTENT.format(task_instruction=tasks[0], chat_records=chat_records)
-    # 获取并保存 deepseek-chat 的结果
-    deepseek_result = ai_chat(message=prompt_gen_doc_content, model="deepseek-chat")
-    with open('result_deepseek.txt', 'a', encoding='utf-8') as f:
-        f.write(deepseek_result)
     
-    # 获取并保存 gpt-4o-mini 的结果
-    gpt4_result = ai_chat(message=prompt_gen_doc_content, model="openai/gpt-4o-mini-2024-07-18")
-    with open('result_gpt4o.txt', 'a', encoding='utf-8') as f:
-        f.write(gpt4_result)
-    
-    # gpt4_result = ai_chat(message=prompt_gen_doc_content, model="gpt-4o-mini")
-    # with open('result_gpt4o_yyds.txt', 'w', encoding='utf-8') as f:
-    #     f.write(gpt4_result)
+    for chat_records in segments:
 
-    print("Deepseek Chat 结果已保存到 result_deepseek.txt")
-    print("GPT-4o-mini 结果已保存到 result_gpt4o.txt")
-
-
-
-    # 创建一个Worker实例后，添加交互式循环
-    # print("欢迎使用AI助手！输入 'quit' 或 'exit' 退出程序")
-    
-    # while True:
-    #     # 获取用户输入
-    #     user_input = input("\n请输入您的问题: ").strip()
-        
-    #     # 检查是否退出
-    #     if user_input.lower() in ['quit', 'exit']:
-    #         print("感谢使用，再见！")
-    #         break
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            # 提交所有任务
+            future_to_task = {
+                executor.submit(process_single_task, i, task, chat_records): i 
+                for i, task in enumerate(tasks)  # 提交所有任务
+            }
             
-    #     # 如果输入不为空，则处理请求
-    #     if user_input:
-    #         combined_input = f"# 这是用户输入：{user_input}\n\n # 这是聊天记录：{chat_records}"
-    #         print(combined_input)
-    #         result = worker.run(combined_input)
-    #         print("\n获得回答:", result)
-    #     else:
-    #         print("输入不能为空，请重新输入")
-    
+            # 使用 tqdm 显示进度
+            for future in tqdm(
+                concurrent.futures.as_completed(future_to_task),
+                total=len(future_to_task),  
+                desc="Processing tasks"
+            ):
+                try:
+                    task_num, result = future.result()
+                except Exception as e:
+                    print(f"Task failed: {str(e)}")
+
 
 if __name__ == "__main__":
-    # 创建一个Worker实例
     
     main()

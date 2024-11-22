@@ -16,7 +16,7 @@ logs
 venv
 .wcf.lock
 .pytest_cache
-
+*.md
 docs
 testDB
 outputs
