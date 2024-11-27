@@ -167,6 +167,7 @@ def process_single_task(task_num, task, chat_records, output_path='output'):
     
     return task_num, gpt4_result
 
+
 def main():    
 
     # with open('ToAnotherCountry.txt', 'r', encoding='utf-8') as file:
@@ -205,7 +206,167 @@ def main():
                 except Exception as e:
                     print(f"Task failed: {str(e)}")
 
+def merge_chapter_results(results: list[str]) -> str:
+    """
+    合并多个结果，按章节组织内容
+    """
+    # 用于存储每个章节的内容
+    chapter_contents = {}
+    
+    for result in results:
+        # 提取 info_start 和 info_end 之间的内容
+        pattern = r'<info_start>(.*?)<info_end>'
+        match = re.search(pattern, result, re.DOTALL)
+        if not match:
+            continue
+            
+        content = match.group(1).strip()
+        
+        # 按章节分割内容
+        chapters = re.split(r'\n(?=[\d一二三四五六七八九十]+、)', content)
+        
+        for chapter in chapters:
+            if not chapter.strip():
+                continue
+                
+            # 提取章节标题
+            chapter_title = chapter.split('\n')[0].strip()
+            chapter_content = '\n'.join(chapter.split('\n')[1:]).strip()
+            
+            if chapter_title not in chapter_contents:
+                chapter_contents[chapter_title] = []
+            
+            # 将内容分成独立的条目
+            items = [item.strip() for item in chapter_content.split('\n') if item.strip()]
+            chapter_contents[chapter_title].extend(items)
+    
+    # 组合最终结果
+    merged_content = ['<info_start>']
+    for title, items in chapter_contents.items():
+        # 去重并保持顺序
+        unique_items = list(dict.fromkeys(items))
+        merged_content.append(f"{title}\n{chr(10).join(unique_items)}\n")
+    merged_content.append('<info_end>')
+    
+    return '\n'.join(merged_content)
+
+def test_update_doc():
+    with open('DNyucun.txt', 'r', encoding='utf-8') as file:
+        chat_text = file.read()
+    segments = split_chat_records(chat_text, max_messages=1300, min_messages=1000, time_gap_minutes=100)
+    
+    # 打印总段数
+    print(f"聊天记录被分割成 {len(segments)} 个部分\n")
+    
+    chat_records = segments[0]
+
+    # user_input = "将聊天记录转为一份常见问答文档"
+    user_input = "将聊天记录转为一份社区生活指南"
+    result = gen_structure(user_input, chat_records)
+
+    # tasks = split_tasks(result)
+    pattern = r'<outline>\s*(.*?)\s*</outline>'
+    match = re.search(pattern, result, re.DOTALL)
+    if match:
+        task = match.group(1).strip()
+    else:
+        task = result
+
+    # 定义一个处理单个 segment 的函数
+    def process_segment(segment):
+        prompt_gen_doc_content = prompt_record2doc.PROMPT_GET_INFO.format(
+            outline=task, 
+            chat_records=segment
+        )
+        return ai_chat(
+            message=prompt_gen_doc_content, 
+            model="openai/gpt-4o-mini-2024-07-18"
+        )
+
+    all_results = []
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        # 提交所有任务
+        future_to_segment = {
+            executor.submit(process_segment, segment): i 
+            for i, segment in enumerate(segments)
+        }
+        
+        # 使用 tqdm 显示进度
+        for future in tqdm(
+            concurrent.futures.as_completed(future_to_segment),
+            total=len(future_to_segment),
+            desc="Processing segments"
+        ):
+            try:
+                result = future.result()
+                all_results.append(result)
+            except Exception as e:
+                print(f"Segment processing failed: {str(e)}")
+
+
+    # 合并结果
+    merged_result = merge_chapter_results(all_results)
+    print(merged_result)
+
+    pattern = r'<info_start>(.*?)<info_end>'
+    match = re.search(pattern, merged_result, re.DOTALL)
+    if match:
+        content = match.group(1).strip()
+        chapters = re.split(r'\n(?=[\d一二三四五六七八九十]+、)', content)
+    else:
+        chapters = []
+
+    print(chapters)
+
+    # Process each chapter in parallel
+    def process_chapter(chapter_content):
+        return ai_chat(
+            message=prompt_record2doc.PROMPT_GEN_END_DOC.format(
+                outline=result,
+                aggregated_info=f"<info_start>\n{chapter_content}\n<info_end>"
+            ),
+            model="openai/gpt-4o-mini-2024-07-18"
+        )
+
+    indexed_results = []
+    with ThreadPoolExecutor(max_workers=len(chapters)) as executor:
+        future_to_chapter = {
+            executor.submit(process_chapter, chapter): i
+            for i, chapter in enumerate(chapters) if chapter.strip()
+        }
+
+        for future in tqdm(
+            concurrent.futures.as_completed(future_to_chapter),
+            total=len(future_to_chapter),
+            desc="Processing chapters"
+        ):
+            try:
+                chapter_result = future.result()
+                # 保存结果和对应的索引
+                chapter_index = future_to_chapter[future]
+                indexed_results.append((chapter_index, chapter_result))
+            except Exception as e:
+                print(f"Chapter processing failed: {str(e)}")
+
+    # 按照原始索引排序并合并结果
+    final_document = '\n\n'.join(
+        result for _, result in sorted(indexed_results, key=lambda x: x[0])
+    )
+    # 去掉 <content> 标记
+    cleaned_document = re.sub(r'<content>\s*|\s*</content>', '', final_document)
+    
+    # 写入文件
+    output_file = 'output/final_document.md'
+    os.makedirs('output', exist_ok=True)
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(cleaned_document)
+    
+    print(f"文档已保存到: {output_file}")
+
+
+
 
 if __name__ == "__main__":
     
-    main()
+    test_update_doc()
+    # main()
