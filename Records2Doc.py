@@ -168,44 +168,6 @@ def process_single_task(task_num, task, chat_records, output_path='output'):
     return task_num, gpt4_result
 
 
-def main():    
-
-    # with open('ToAnotherCountry.txt', 'r', encoding='utf-8') as file:
-    with open('DNyucun.txt', 'r', encoding='utf-8') as file:
-        chat_text = file.read()
-    segments = split_chat_records(chat_text, max_messages=1000, min_messages=800, time_gap_minutes=100)
-    
-    # 打印总段数
-    print(f"聊天记录被分割成 {len(segments)} 个部分\n")
-    
-    chat_records = segments[0]
-
-    # user_input = "将聊天记录转为一份常见问答文档"
-    user_input = "将聊天记录转为一份社区生活指南"
-    result = gen_structure(user_input, chat_records)
-
-    tasks = split_tasks(result)
-    
-    for chat_records in segments:
-
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            # 提交所有任务
-            future_to_task = {
-                executor.submit(process_single_task, i, task, chat_records): i 
-                for i, task in enumerate(tasks)  # 提交所有任务
-            }
-            
-            # 使用 tqdm 显示进度
-            for future in tqdm(
-                concurrent.futures.as_completed(future_to_task),
-                total=len(future_to_task),  
-                desc="Processing tasks"
-            ):
-                try:
-                    task_num, result = future.result()
-                except Exception as e:
-                    print(f"Task failed: {str(e)}")
-
 def merge_chapter_results(results: list[str]) -> str:
     """
     合并多个结果，按章节组织内容
